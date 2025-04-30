@@ -6,7 +6,7 @@ services:
       - "9092:9092"
       - "9094:9094"
     volumes:
-      - "kafka_data:/bitnami"
+      - "./kafka_data:/bitnami"
     environment:
       - KAFKA_CFG_PROCESS_ROLES=broker,controller
       - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
@@ -34,7 +34,7 @@ services:
       - LOGGING_LEVEL_ROOT='INFO'
       - SPRING_CONFIG_LOCATION=file:/etc/kafkaui/config.yml
     volumes:
-      - config.yml:/etc/kafkaui/config.yml
+      - "./config.yml:/etc/kafkaui/config.yml"
     depends_on:
       - kafka_b
 
