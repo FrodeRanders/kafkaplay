@@ -1,0 +1,47 @@
+#
+quarkus:
+  application:
+    name: "durga"
+
+mp:
+  messaging:
+    incoming:
+      # Input topic from Task A
+      processA_taskA_output:
+        connector: "smallrye-kafka"
+        topic: "processA_taskA_output"
+        value:
+          deserializer: "org.apache.kafka.common.serialization.StringDeserializer"
+
+      # Kafka consumer for both topics
+      task-output:
+        connector: "smallrye-kafka"
+        topic: "processA_taskB_output,processA_taskC_output"
+        value:
+          deserializer: "org.apache.kafka.common.serialization.StringDeserializer"
+        auto:
+          offset:
+            reset: "earliest"
+
+    outgoing:
+      # Output to Task B
+      processA_taskB_input:
+        connector: "smallrye-kafka"
+        topic: "processA_taskB_input"
+        value:
+          serializer: "org.apache.kafka.common.serialization.StringSerializer"
+
+      # Output to Task C
+      processA_taskC_input:
+        connector: "smallrye-kafka"
+        topic: "processA_taskC_input"
+        value:
+          serializer: "org.apache.kafka.common.serialization.StringSerializer"
+
+      # Kafka producer to Task D
+      processA_taskD_input:
+        connector: "smallrye-kafka"
+        topic: "processA_taskD_input"
+        value:
+          serializer: "org.apache.kafka.common.serialization.StringSerializer"
+
