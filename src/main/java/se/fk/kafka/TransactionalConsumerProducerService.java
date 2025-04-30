@@ -59,6 +59,7 @@ public class TransactionalConsumerProducerService implements AutoCloseable {
         // Poll for records
         ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(1));
         log.info("{} records to process", records.count());
+        int count = 0;
         for (ConsumerRecord<String, String> record : records) {
             try {
                 // Begin a new transaction
@@ -78,6 +79,10 @@ public class TransactionalConsumerProducerService implements AutoCloseable {
                 ConsumerGroupMetadata metadata = consumer.groupMetadata();
 
                 // Commit the consumer offset as part of the transaction
+                // When a producer is involved in transactions and commits consumer
+                // offsets with sendOffsetsToTransaction(), then it must know which
+                // group the offsets belong to because it’s acting on behalf of a consumer.
+                // This group metadata is copied from the consumer.
                 producer.sendOffsetsToTransaction(
                         Collections.singletonMap(
                                 new TopicPartition(record.topic(), record.partition()),
@@ -88,13 +93,14 @@ public class TransactionalConsumerProducerService implements AutoCloseable {
 
                 // Commit the transaction
                 producer.commitTransaction();
-                log.info("Sent messages for process {} with transaction {}", processInstanceId, transactionalId);
+                count++;
 
             } catch (Exception e) {
                 // Abort transaction on failure
                 producer.abortTransaction();
                 log.error("Error sending messages for with transaction {}", transactionalId, e);
             }
+            log.info("Sent {} messages for with transaction {}", count, transactionalId);
         }
     }
 

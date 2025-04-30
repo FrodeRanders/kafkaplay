@@ -43,11 +43,11 @@ public class TransactionalProducer implements AutoCloseable {
             for (int i = 0; i < count; i++) {
                 // Produce messages
                 ProducerRecord<String, String> record1 =
-                        new ProducerRecord<>("ProcessA_TaskA_input", processInstanceId, "record A ...");
+                        new ProducerRecord<>("ProcessA_TaskA_input", processInstanceId, "Process A, Task A, record " + i);
                 producer.send(record1);
 
                 ProducerRecord<String, String> record2 =
-                        new ProducerRecord<>("ProcessA_TaskB_input", processInstanceId, "record B...");
+                        new ProducerRecord<>("ProcessA_TaskB_input", processInstanceId, "Process A, Task B, record " + i);
                 producer.send(record2);
             }
 
