@@ -2,6 +2,7 @@ package se.fk.kafka;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.Properties;
+import com.fasterxml.uuid.Generators;
 
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -10,10 +11,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @ApplicationScoped
-public class TransactionalProducer {
+public class TransactionalProducer implements AutoCloseable {
     protected static final Logger log = LoggerFactory.getLogger(TransactionalProducer.class);
 
     private KafkaProducer<String, String> producer;
+    private final String transactionalId = Generators.timeBasedEpochGenerator().generate().toString();
 
     public TransactionalProducer() {
         // Configure the producer with transactional support
@@ -23,7 +25,7 @@ public class TransactionalProducer {
                 "org.apache.kafka.common.serialization.StringSerializer");
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
                 "org.apache.kafka.common.serialization.StringSerializer");
-        props.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "unique-transactional-id"); // TODO
+        props.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId);
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
         props.put(ProducerConfig.ACKS_CONFIG, "all");
 
@@ -31,33 +33,35 @@ public class TransactionalProducer {
         producer.initTransactions();
     }
 
-    public void sendMessagesInTransaction() {
+    public void sendMessagesInTransaction(int count) {
         // Begin the transaction
-        String processInstanceId = "...";
+        String processInstanceId = Generators.timeBasedEpochGenerator().generate().toString();
 
         try {
-            // Begin the transaction
             producer.beginTransaction();
 
-            // Produce messages
-            ProducerRecord<String, String> record1 =
-                    new ProducerRecord<>("ProcessA_TaskA_input", processInstanceId, "...");
-            producer.send(record1);
+            for (int i = 0; i < count; i++) {
+                // Produce messages
+                ProducerRecord<String, String> record1 =
+                        new ProducerRecord<>("ProcessA_TaskA_input", processInstanceId, "record A ...");
+                producer.send(record1);
 
-            ProducerRecord<String, String> record2 =
-                    new ProducerRecord<>("ProcessA_TaskB_input", processInstanceId, "...");
-            producer.send(record2);
+                ProducerRecord<String, String> record2 =
+                        new ProducerRecord<>("ProcessA_TaskB_input", processInstanceId, "record B...");
+                producer.send(record2);
+            }
 
-            // Commit the transaction
             producer.commitTransaction();
+
+            log.info("Sent {} messages for process {} with transaction {}", count, processInstanceId, transactionalId);
 
         } catch (Exception e) {
             // Rollback the transaction if an error occurs
             producer.abortTransaction();
+            log.error("Error sending messages for process {} with transaction {}", processInstanceId, transactionalId, e);
         }
     }
 
-    // Optionally close the producer
     public void close() {
         producer.close();
     }

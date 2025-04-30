@@ -41,7 +41,7 @@
             <appender-ref ref="STATISTICS"/>
         </logger>
 
-        <Root level="DEBUG">
+        <Root level="INFO">
             <appender-ref ref="INTERNAL"/>
         </Root>
     </Loggers>

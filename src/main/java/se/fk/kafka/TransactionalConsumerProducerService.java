@@ -1,5 +1,6 @@
 package se.fk.kafka;
 
+import com.fasterxml.uuid.Generators;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import org.apache.kafka.clients.consumer.*;
@@ -15,17 +16,19 @@ import java.util.Collections;
 import java.util.Properties;
 
 @ApplicationScoped
-public class TransactionalConsumerProducerService {
+public class TransactionalConsumerProducerService implements AutoCloseable {
     protected static final Logger log = LoggerFactory.getLogger(TransactionalConsumerProducerService.class);
 
     private KafkaConsumer<String, String> consumer;
     private KafkaProducer<String, String> producer;
+    private final String transactionalId = Generators.timeBasedEpochGenerator().generate().toString();
+    private final String groupId = "ProcessA-group-id";
 
     public TransactionalConsumerProducerService() {
-        // Configure the consumer and producer with transaction support
+        // Configure the consumer with transaction support
         Properties consumerProps = new Properties();
         consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9094");
-        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "ProcessA-group-id"); // TODO
+        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
                 "org.apache.kafka.common.serialization.StringDeserializer");
         consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
@@ -35,13 +38,14 @@ public class TransactionalConsumerProducerService {
 
         consumer = new KafkaConsumer<>(consumerProps);
 
+        // Configure the producer with transactional support
         Properties producerProps = new Properties();
         producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9094");
         producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
                 "org.apache.kafka.common.serialization.StringSerializer");
         producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
                 "org.apache.kafka.common.serialization.StringSerializer");
-        producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "consumer-transactional-id"); // TODO
+        producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId);
         producerProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
 
         producer = new KafkaProducer<>(producerProps);
@@ -50,10 +54,11 @@ public class TransactionalConsumerProducerService {
 
     public void processMessageInTransaction() {
         // Subscribe to the input topic
-        consumer.subscribe(Collections.singletonList("ProcessA_TaskB_input "));
+        consumer.subscribe(Collections.singletonList("ProcessA_TaskB_input"));
 
         // Poll for records
         ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(1));
+        log.info("{} records to process", records.count());
         for (ConsumerRecord<String, String> record : records) {
             try {
                 // Begin a new transaction
@@ -65,7 +70,7 @@ public class TransactionalConsumerProducerService {
 
                 // Produce results to another topic
                 ProducerRecord<String, String> outputRecord =
-                        new ProducerRecord<>("ProcessA_TaskB_output ",
+                        new ProducerRecord<>("ProcessA_TaskB_output",
                                 processInstanceId, message);
                 producer.send(outputRecord);
 
@@ -83,11 +88,18 @@ public class TransactionalConsumerProducerService {
 
                 // Commit the transaction
                 producer.commitTransaction();
+                log.info("Sent messages for process {} with transaction {}", processInstanceId, transactionalId);
 
             } catch (Exception e) {
                 // Abort transaction on failure
                 producer.abortTransaction();
+                log.error("Error sending messages for with transaction {}", transactionalId, e);
             }
         }
+    }
+
+    public void close() {
+        producer.close();
+        consumer.close();
     }
 }

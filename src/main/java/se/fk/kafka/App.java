@@ -12,6 +12,38 @@ public class App {
     private static final Logger log = LogManager.getLogger(App.class);
 
     public static void main(String[] args) {
+        run1();
+        run2();
+    }
+
+    private static void run1() {
+        try (TransactionalConsumerProducerService consumerProducer = new TransactionalConsumerProducerService()) {
+            consumerProducer.processMessageInTransaction();
+
+            // Transaction 1
+            try (TransactionalProducer producer = new TransactionalProducer()) {
+                producer.sendMessagesInTransaction(1000);
+            }
+
+            consumerProducer.processMessageInTransaction();
+
+            // Transaction 2
+            try (TransactionalProducer producer = new TransactionalProducer()) {
+                producer.sendMessagesInTransaction(1000);
+            }
+
+            consumerProducer.processMessageInTransaction();
+
+            // Transaction 3
+            try (TransactionalProducer producer = new TransactionalProducer()) {
+                producer.sendMessagesInTransaction(1000);
+            }
+
+            consumerProducer.processMessageInTransaction();
+        }
+    }
+
+    private static void run2() {
         Properties properties = new Properties();
         properties.put("bootstrap.servers", "localhost:9094");
         properties.put("key.serializer", StringSerializer.class);
