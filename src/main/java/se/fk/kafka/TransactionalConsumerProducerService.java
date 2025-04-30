@@ -1,13 +1,14 @@
 package se.fk.kafka;
 
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
 
 import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Collections;
@@ -15,6 +16,7 @@ import java.util.Properties;
 
 @ApplicationScoped
 public class TransactionalConsumerProducerService {
+    protected static final Logger log = LoggerFactory.getLogger(TransactionalConsumerProducerService.class);
 
     private KafkaConsumer<String, String> consumer;
     private KafkaProducer<String, String> producer;

@@ -6,13 +6,15 @@ import org.eclipse.microprofile.reactive.messaging.Channel;
 import org.eclipse.microprofile.reactive.messaging.Emitter;
 import org.eclipse.microprofile.reactive.messaging.Incoming;
 import org.eclipse.microprofile.reactive.messaging.Message;
-import org.eclipse.microprofile.reactive.messaging.Metadata;
 import org.apache.kafka.common.header.Headers;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletionStage;
 
 @ApplicationScoped
 public class XorGatewayService {
+    protected static final Logger log = LoggerFactory.getLogger(XorGatewayService.class);
 
     @Inject
     @Channel("processA_taskB_input")

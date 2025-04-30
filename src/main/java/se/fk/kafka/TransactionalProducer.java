@@ -1,15 +1,17 @@
 package se.fk.kafka;
 
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
 import java.util.Properties;
 
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @ApplicationScoped
 public class TransactionalProducer {
+    protected static final Logger log = LoggerFactory.getLogger(TransactionalProducer.class);
 
     private KafkaProducer<String, String> producer;
 

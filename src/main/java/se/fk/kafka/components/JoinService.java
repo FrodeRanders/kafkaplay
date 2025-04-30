@@ -3,7 +3,10 @@ package se.fk.kafka.components;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.reactive.messaging.*;
+import io.smallrye.reactive.messaging.MutinyEmitter;
 import org.apache.kafka.common.header.Headers;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -11,13 +14,14 @@ import java.util.concurrent.CompletionStage;
 
 @ApplicationScoped
 public class JoinService {
+    protected static final Logger log = LoggerFactory.getLogger(JoinService.class);
 
     // Non-persistent map to track task completion per process instance
     private final Map<String, Map<String, Boolean>> taskCompletion = new ConcurrentHashMap<>();
 
     @Inject
     @Channel("processA_taskD_input")
-    io.smallrye.reactive.messaging.MutinyEmitter<String> taskDEmitter;
+    MutinyEmitter<String> taskDEmitter;
 
     @Incoming("task-output")
     public CompletionStage<Void> processJoin(Message<String> msg) {
@@ -35,8 +39,8 @@ public class JoinService {
                 .orElse(null);
 
         String topic = msg.getMetadata(Headers.class)
-                .map(headers -> getTopicFromHeaders(headers))
-                .orElse("unknown");
+                .map(this::getTopicFromHeaders)
+                .orElse(null);
 
         if (processInstanceId == null || topic == null) {
             System.err.println("Missing headers. Skipping message: " + payload);
