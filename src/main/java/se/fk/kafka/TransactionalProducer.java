@@ -26,6 +26,7 @@ public class TransactionalProducer implements AutoCloseable {
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
                 "org.apache.kafka.common.serialization.StringSerializer");
         props.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId);
+        props.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, "60000"); // 60 seconds
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
         props.put(ProducerConfig.ACKS_CONFIG, "all");
 

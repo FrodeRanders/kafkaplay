@@ -47,6 +47,7 @@ public class TransactionalConsumerProducerService implements AutoCloseable {
         producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
                 "org.apache.kafka.common.serialization.StringSerializer");
         producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId);
+        producerProps.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, "120000"); // 120 seconds
         producerProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
 
         producer = new KafkaProducer<>(producerProps);
@@ -66,6 +67,7 @@ public class TransactionalConsumerProducerService implements AutoCloseable {
             ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(1));
             if (records.isEmpty()) {
                 log.info("No more messages to process");
+                Thread.yield();
                 continue; // don't break
             }
 
