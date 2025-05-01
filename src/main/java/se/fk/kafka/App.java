@@ -6,6 +6,7 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.time.Duration;
 import java.util.Properties;
 
 public class App {
@@ -13,33 +14,31 @@ public class App {
 
     public static void main(String[] args) {
         run1();
-        run2();
+        //run2();
     }
 
     private static void run1() {
+        // Transaction 1
+        long sent = 0L;
+
+        try (TransactionalProducer producer = new TransactionalProducer()) {
+            sent += producer.sendMessagesInTransaction(1000);
+        }
+
+        // Transaction 2
+        try (TransactionalProducer producer = new TransactionalProducer()) {
+            sent += producer.sendMessagesInTransaction(1000);
+        }
+
+        // Transaction 3
+        try (TransactionalProducer producer = new TransactionalProducer()) {
+            sent += producer.sendMessagesInTransaction(1000);
+        }
+        System.out.println(String.format("Sent %d messages", sent));
+
         try (TransactionalConsumerProducerService consumerProducer = new TransactionalConsumerProducerService()) {
-            consumerProducer.processMessageInTransaction();
-
-            // Transaction 1
-            try (TransactionalProducer producer = new TransactionalProducer()) {
-                producer.sendMessagesInTransaction(1000);
-            }
-
-            consumerProducer.processMessageInTransaction();
-
-            // Transaction 2
-            try (TransactionalProducer producer = new TransactionalProducer()) {
-                producer.sendMessagesInTransaction(1000);
-            }
-
-            consumerProducer.processMessageInTransaction();
-
-            // Transaction 3
-            try (TransactionalProducer producer = new TransactionalProducer()) {
-                producer.sendMessagesInTransaction(1000);
-            }
-
-            consumerProducer.processMessageInTransaction();
+            long processed = consumerProducer.processMessageInTransaction(Duration.ofSeconds(60));
+            System.out.println(String.format("Processed %d messages", processed));
         }
     }
 

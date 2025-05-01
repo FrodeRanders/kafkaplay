@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.Properties;
 
@@ -52,56 +53,62 @@ public class TransactionalConsumerProducerService implements AutoCloseable {
         producer.initTransactions();
     }
 
-    public void processMessageInTransaction() {
-        // Subscribe to the input topic
+    public long processMessageInTransaction(Duration timeout) {
         consumer.subscribe(Collections.singletonList("ProcessA_TaskB_input"));
+        long processed = 0L;
 
-        // Poll for records
-        ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(1));
-        log.info("{} records to process", records.count());
-        int count = 0;
-        for (ConsumerRecord<String, String> record : records) {
-            try {
-                // Begin a new transaction
-                producer.beginTransaction();
+        Instant deadline = Instant.now().plus(timeout);
+        while (Instant.now().isBefore(deadline)) {
 
-                // Process the consumed message
-                String processInstanceId = record.key();
-                String message = record.value();
-
-                // Produce results to another topic
-                ProducerRecord<String, String> outputRecord =
-                        new ProducerRecord<>("ProcessA_TaskB_output",
-                                processInstanceId, message);
-                producer.send(outputRecord);
-
-                //
-                ConsumerGroupMetadata metadata = consumer.groupMetadata();
-
-                // Commit the consumer offset as part of the transaction
-                // When a producer is involved in transactions and commits consumer
-                // offsets with sendOffsetsToTransaction(), then it must know which
-                // group the offsets belong to because it’s acting on behalf of a consumer.
-                // This group metadata is copied from the consumer.
-                producer.sendOffsetsToTransaction(
-                        Collections.singletonMap(
-                                new TopicPartition(record.topic(), record.partition()),
-                                new OffsetAndMetadata(record.offset() + 1)
-                        ),
-                        metadata
-                );
-
-                // Commit the transaction
-                producer.commitTransaction();
-                count++;
-
-            } catch (Exception e) {
-                // Abort transaction on failure
-                producer.abortTransaction();
-                log.error("Error sending messages for with transaction {}", transactionalId, e);
+            // Poll for records.
+            // Note that this will only process a batch of messages,
+            // say 500 messages, if max.poll.records=500!
+            ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(1));
+            if (records.isEmpty()) {
+                log.info("No more messages to process");
+                continue; // don't break
             }
-            log.info("Sent {} messages for with transaction {}", count, transactionalId);
+
+            log.info("Processing {} records", records.count());
+            for (ConsumerRecord<String, String> record : records) {
+                try {
+                    producer.beginTransaction();
+
+                    String processInstanceId = record.key();
+                    String message = record.value();
+
+                    ProducerRecord<String, String> outputRecord =
+                            new ProducerRecord<>("ProcessA_TaskB_output",
+                                    processInstanceId, message);
+
+                    producer.send(outputRecord);
+
+                    // Commit the consumer offset as part of the transaction.
+                    //
+                    // When a producer is involved in transactions and commits consumer
+                    // offsets with sendOffsetsToTransaction(), then it must know which
+                    // group the offsets belong to because it’s acting on behalf of a consumer.
+                    // This group metadata is copied from the consumer.
+                    producer.sendOffsetsToTransaction(
+                            Collections.singletonMap(
+                                    new TopicPartition(record.topic(), record.partition()),
+                                    new OffsetAndMetadata(record.offset() + 1)
+                            ),
+                            consumer.groupMetadata()
+                    );
+
+                    producer.commitTransaction();
+                    processed++;
+
+                } catch (Exception e) {
+                    // Abort transaction on failure
+                    producer.abortTransaction();
+                    log.error("Error sending messages for with transaction {}", transactionalId, e);
+                }
+            }
         }
+        log.info("Processed {} messages with transaction {}", processed, transactionalId);
+        return processed;
     }
 
     public void close() {

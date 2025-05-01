@@ -33,9 +33,10 @@ public class TransactionalProducer implements AutoCloseable {
         producer.initTransactions();
     }
 
-    public void sendMessagesInTransaction(int count) {
+    public long sendMessagesInTransaction(int count) {
         // Begin the transaction
         String processInstanceId = Generators.timeBasedEpochGenerator().generate().toString();
+        long sent = 0L;
 
         try {
             producer.beginTransaction();
@@ -52,6 +53,7 @@ public class TransactionalProducer implements AutoCloseable {
             }
 
             producer.commitTransaction();
+            sent += count;
 
             log.info("Sent {} messages for process {} with transaction {}", count, processInstanceId, transactionalId);
 
@@ -60,6 +62,8 @@ public class TransactionalProducer implements AutoCloseable {
             producer.abortTransaction();
             log.error("Error sending messages for process {} with transaction {}", processInstanceId, transactionalId, e);
         }
+
+        return sent;
     }
 
     public void close() {
