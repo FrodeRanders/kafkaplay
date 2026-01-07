@@ -1,0 +1,798 @@
+group scaffold;
+delimiters "%", "%"
+
+workerClass(packageName, className, processId, taskId) ::= <<
+package %packageName%;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import org.eclipse.microprofile.reactive.messaging.Incoming;
+import org.eclipse.microprofile.reactive.messaging.Outgoing;
+import se.fk.kafka.ProcessEvent;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@ApplicationScoped
+public class %className% {
+
+    @Incoming("%processId%_%taskId%_input")
+    @Outgoing("%processId%_%taskId%_output")
+    public String handle(String payload) {
+        ProcessEvent inputEvent = ProcessEvent.fromJson(payload);
+        Map<String, Object> outputPayload = new HashMap<>();
+        if (inputEvent.payload() != null) {
+            outputPayload.putAll(inputEvent.payload());
+        }
+        outputPayload.put("worker", "%taskId%");
+
+        ProcessEvent outputEvent = new ProcessEvent(
+                inputEvent.processInstanceId(),
+                inputEvent.processId(),
+                "%taskId%",
+                inputEvent.tokenId(),
+                inputEvent.correlationId(),
+                outputPayload,
+                ProcessEvent.Status.COMPLETED,
+                null
+        );
+
+        return outputEvent.toJson();
+    }
+}
+>>
+
+transactionalWorkerClass(packageName, className, processId, taskId) ::= <<
+package %packageName%;
+
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
+import se.fk.kafka.ProcessEvent;
+
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
+import java.util.UUID;
+
+public class %className% {
+    public static void main(String[] args) {
+        String bootstrap = args.length > 0 ? args[0] : "localhost:9094";
+        String groupId = args.length > 1 ? args[1] : "%processId%_%taskId%_group";
+        long timeoutSeconds = args.length > 2 ? Long.parseLong(args[2]) : 60;
+
+        Properties consumerProps = new Properties();
+        consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
+        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        consumerProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        consumerProps.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
+
+        Properties producerProps = new Properties();
+        producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
+        producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        producerProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
+        producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "%processId%_%taskId%_" + UUID.randomUUID());
+
+        String inputTopic = "%processId%_%taskId%_input";
+        String outputTopic = "%processId%_%taskId%_output";
+
+        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps);
+             KafkaProducer<String, String> producer = new KafkaProducer<>(producerProps)) {
+            producer.initTransactions();
+            consumer.subscribe(java.util.Collections.singletonList(inputTopic));
+
+            long deadlineMs = System.currentTimeMillis() + (timeoutSeconds * 1000);
+            while (System.currentTimeMillis() < deadlineMs) {
+                ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(1));
+                if (records.isEmpty()) {
+                    continue;
+                }
+                for (ConsumerRecord<String, String> record : records) {
+                    producer.beginTransaction();
+                    ProcessEvent inputEvent = ProcessEvent.fromJson(record.value());
+                    Map<String, Object> payload = new HashMap<>();
+                    if (inputEvent.payload() != null) {
+                        payload.putAll(inputEvent.payload());
+                    }
+                    payload.put("worker", "%taskId%");
+                    ProcessEvent outputEvent = new ProcessEvent(
+                            inputEvent.processInstanceId(),
+                            inputEvent.processId(),
+                            "%taskId%",
+                            inputEvent.tokenId(),
+                            inputEvent.correlationId(),
+                            payload,
+                            ProcessEvent.Status.COMPLETED,
+                            null
+                    );
+                    producer.send(new ProducerRecord<>(outputTopic, record.key(), outputEvent.toJson()));
+                    producer.sendOffsetsToTransaction(
+                            java.util.Collections.singletonMap(
+                                    new TopicPartition(record.topic(), record.partition()),
+                                    new OffsetAndMetadata(record.offset() + 1)
+                            ),
+                            consumer.groupMetadata()
+                    );
+                    producer.commitTransaction();
+                }
+            }
+        }
+    }
+}
+>>
+
+xorGatewayClass(packageName, className, inputChannel, outputs) ::= <<
+package %packageName%;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.eclipse.microprofile.reactive.messaging.Channel;
+import org.eclipse.microprofile.reactive.messaging.Emitter;
+import org.eclipse.microprofile.reactive.messaging.Incoming;
+import org.eclipse.microprofile.reactive.messaging.Message;
+import se.fk.kafka.ProcessEvent;
+
+import java.util.Map;
+import java.util.concurrent.CompletionStage;
+
+@ApplicationScoped
+public class %className% {
+%outputs:{o|
+
+    @Inject
+    @Channel("%o.channel%")
+    Emitter<String> %o.emitter%;
+}%
+
+    @Incoming("%inputChannel%")
+    public CompletionStage<Void> route(Message<String> msg) {
+        ProcessEvent inputEvent = ProcessEvent.fromJson(msg.getPayload());
+%outputs:{o|
+%o.conditionBlock%
+}%
+        return msg.ack();
+    }
+
+    private boolean evaluateCondition(String expression, ProcessEvent event) {
+        if (expression == null || expression.isBlank()) {
+            return false;
+        }
+        String expr = expression.trim();
+        if (expr.startsWith("${") && expr.endsWith("}")) {
+            expr = expr.substring(2, expr.length() - 1).trim();
+        }
+        Map<String, Object> payload = event.payload();
+        if (payload == null) {
+            return false;
+        }
+        String operator = expr.contains("!=") ? "!=" : expr.contains("==") ? "==" : null;
+        if (operator == null) {
+            Object value = payload.get(expr);
+            return value instanceof Boolean ? (Boolean) value : value != null;
+        }
+        String[] parts = expr.split(operator, 2);
+        if (parts.length != 2) {
+            return false;
+        }
+        String left = parts[0].trim();
+        String right = parts[1].trim();
+        Object value = payload.get(left);
+        String literal = stripQuotes(right);
+        if ("true".equalsIgnoreCase(literal) || "false".equalsIgnoreCase(literal)) {
+            boolean expected = Boolean.parseBoolean(literal);
+            if (value instanceof Boolean boolValue) {
+                return operator.equals("==") == (boolValue == expected);
+            }
+            return operator.equals("==") == expected;
+        }
+        String actual = value != null ? value.toString() : null;
+        boolean equals = actual != null && actual.equals(literal);
+        return operator.equals("==") == equals;
+    }
+
+    private String stripQuotes(String value) {
+        if ((value.startsWith("\"") && value.endsWith("\""))
+                || (value.startsWith("'") && value.endsWith("'"))) {
+            return value.substring(1, value.length() - 1);
+        }
+        return value;
+    }
+}
+>>
+
+andSplitGatewayClass(packageName, className, inputChannel, outputs) ::= <<
+package %packageName%;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.eclipse.microprofile.reactive.messaging.Channel;
+import org.eclipse.microprofile.reactive.messaging.Emitter;
+import org.eclipse.microprofile.reactive.messaging.Incoming;
+import org.eclipse.microprofile.reactive.messaging.Message;
+import se.fk.kafka.ProcessEvent;
+
+import java.util.concurrent.CompletionStage;
+
+@ApplicationScoped
+public class %className% {
+%outputs:{o|
+
+    @Inject
+    @Channel("%o.channel%")
+    Emitter<String> %o.emitter%;
+}%
+
+    @Incoming("%inputChannel%")
+    public CompletionStage<Void> split(Message<String> msg) {
+        ProcessEvent.fromJson(msg.getPayload());
+%outputs:{o|
+        %o.emitter%.send(msg.getPayload());
+}%
+        return msg.ack();
+    }
+}
+>>
+
+andJoinGatewayClass(packageName, className, processId, outputChannel, outputTaskId, incomingMethodsBlock, joinCondition) ::= <<
+package %packageName%;
+
+import jakarta.annotation.PreDestroy;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.eclipse.microprofile.reactive.messaging.Channel;
+import org.eclipse.microprofile.reactive.messaging.Incoming;
+import org.eclipse.microprofile.reactive.messaging.Message;
+import io.smallrye.reactive.messaging.MutinyEmitter;
+import se.fk.kafka.ProcessEvent;
+import se.fk.kafka.ProcessState;
+import se.fk.kafka.ProcessStateStore;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletionStage;
+import java.util.UUID;
+
+@ApplicationScoped
+public class %className% {
+    private final ProcessStateStore stateStore =
+            new ProcessStateStore("localhost:9094", "%processId%_state");
+
+    @Inject
+    @Channel("%outputChannel%")
+    MutinyEmitter<String> outputEmitter;
+
+%incomingMethodsBlock%
+
+    private CompletionStage<Void> handleJoin(String activityId, Message<String> msg) {
+        ProcessEvent event = ProcessEvent.fromJson(msg.getPayload());
+        if (event.status() != ProcessEvent.Status.COMPLETED) {
+            return msg.ack();
+        }
+
+        ProcessState state = stateStore.loadLatest(event.processInstanceId(), Duration.ofSeconds(2));
+        List<ProcessState.Token> tokens = new ArrayList<>();
+        Map<String, Object> variables = new HashMap<>();
+        long version = 0;
+        if (state != null) {
+            if (state.tokens() != null) {
+                tokens.addAll(state.tokens());
+            }
+            if (state.variables() != null) {
+                variables.putAll(state.variables());
+            }
+            version = state.version();
+        }
+
+        tokens.add(new ProcessState.Token(UUID.randomUUID().toString(), activityId));
+        stateStore.save(new ProcessState(event.processInstanceId(), tokens, variables, version + 1));
+
+        boolean ready = %joinCondition%;
+        if (ready) {
+            outputEmitter.send(new ProcessEvent(
+                    event.processInstanceId(),
+                    event.processId(),
+                    "%outputTaskId%",
+                    UUID.randomUUID().toString(),
+                    event.correlationId(),
+                    event.payload(),
+                    ProcessEvent.Status.STARTED,
+                    null
+            ).toJson());
+        }
+        return msg.ack();
+    }
+
+    @PreDestroy
+    public void close() {
+        stateStore.close();
+    }
+}
+>>
+
+orchestratorClass(packageName, className, processId, incomingMethodsBlock) ::= <<
+package %packageName%;
+
+import jakarta.annotation.PreDestroy;
+import jakarta.enterprise.context.ApplicationScoped;
+import org.eclipse.microprofile.reactive.messaging.Incoming;
+import org.eclipse.microprofile.reactive.messaging.Message;
+import se.fk.kafka.ProcessEvent;
+import se.fk.kafka.ProcessState;
+import se.fk.kafka.ProcessStateStore;
+
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletionStage;
+
+@ApplicationScoped
+public class %className% {
+    private final ProcessStateStore stateStore =
+            new ProcessStateStore("localhost:9094", "%processId%_state");
+
+%incomingMethodsBlock%
+
+    private CompletionStage<Void> handleCompletion(Message<String> msg) {
+        ProcessEvent event = ProcessEvent.fromJson(msg.getPayload());
+        if (event.status() != ProcessEvent.Status.COMPLETED) {
+            return msg.ack();
+        }
+
+        ProcessState state = stateStore.loadLatest(event.processInstanceId(), Duration.ofSeconds(2));
+        Map<String, Object> variables = new HashMap<>();
+        long version = 0;
+        if (state != null) {
+            if (state.variables() != null) {
+                variables.putAll(state.variables());
+            }
+            version = state.version();
+        }
+        variables.put("status", "COMPLETED");
+        stateStore.save(new ProcessState(event.processInstanceId(), List.of(), variables, version + 1));
+        return msg.ack();
+    }
+
+    @PreDestroy
+    public void close() {
+        stateStore.close();
+    }
+}
+>>
+
+applicationYaml(processId, tasks) ::= <<
+mp:
+  messaging:
+    incoming:
+%tasks:{t|
+      %processId%_%t%_input:
+        connector: "smallrye-kafka"
+        topic: "%processId%_%t%_input"
+        value:
+          deserializer: "org.apache.kafka.common.serialization.StringDeserializer"
+}%
+    outgoing:
+%tasks:{t|
+      %processId%_%t%_output:
+        connector: "smallrye-kafka"
+        topic: "%processId%_%t%_output"
+        value:
+          serializer: "org.apache.kafka.common.serialization.StringSerializer"
+}%
+>>
+
+topicsScript(processId, tasks) ::= <<
+#!/usr/bin/env bash
+set -euo pipefail
+
+BOOTSTRAP=${BOOTSTRAP:-localhost:9094}
+
+topics=(
+  "%processId%_start"
+  "%processId%_state"
+%tasks:{t|
+  "%processId%_%t%_input"
+  "%processId%_%t%_output"
+}%
+)
+
+for topic in "${topics[@]}"; do
+  if [[ "$topic" == "%processId%_state" ]]; then
+    kafka-topics --bootstrap-server "$BOOTSTRAP" \
+      --create --if-not-exists --topic "$topic" \
+      --config cleanup.policy=compact
+  else
+    kafka-topics --bootstrap-server "$BOOTSTRAP" \
+      --create --if-not-exists --topic "$topic"
+  fi
+done
+>>
+
+runLocalScript(processId, starterClass) ::= <<
+#!/usr/bin/env bash
+set -euo pipefail
+
+BOOTSTRAP=${BOOTSTRAP:-localhost:9094}
+START_KAFKA=${START_KAFKA:-false}
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${ROOT_DIR}/.." && pwd)"
+
+if [[ "$START_KAFKA" == "true" ]]; then
+  if [[ -d "${PROJECT_ROOT}/setup" ]]; then
+    (cd "${PROJECT_ROOT}/setup" && docker compose up -d)
+  else
+    echo "setup/ not found at ${PROJECT_ROOT}/setup; skipping Kafka startup."
+  fi
+fi
+
+mvn -q clean package
+
+JAR="target/%processId%-generated-1.0-SNAPSHOT-all.jar"
+if [[ ! -f "$JAR" ]]; then
+  echo "Missing shaded jar at $JAR"
+  exit 1
+fi
+
+java -cp "$JAR" se.fk.kafka.generated.%starterClass%Starter "$BOOTSTRAP" valid=true
+>>
+pomXml(processId, starterClass) ::= <<
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>se.fk.generated</groupId>
+    <artifactId>%processId%-generated</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <quarkus.platform.version>3.29.2</quarkus.platform.version>
+        <kafka.version>4.1.1</kafka.version>
+        <slf4j.version>2.0.17</slf4j.version>
+        <log4j.version>2.25.3</log4j.version>
+        <jackson.version>3.0.3</jackson.version>
+        <logmgr.version>3.1.2.Final</logmgr.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-messaging-kafka</artifactId>
+            <version>${quarkus.platform.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.jboss.logmanager</groupId>
+            <artifactId>jboss-logmanager</artifactId>
+            <version>${logmgr.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>${kafka.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>${slf4j.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j2-impl</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>${maven.compiler.source}</source>
+                    <target>${maven.compiler.target}</target>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <shadedArtifactAttached>true</shadedArtifactAttached>
+                            <shadedClassifierName>all</shadedClassifierName>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <manifestEntries>
+                                        <Main-Class>se.fk.kafka.generated.%starterClass%Starter</Main-Class>
+                                        <Java-Util-Logging-Manager>org.jboss.logmanager.LogManager</Java-Util-Logging-Manager>
+                                    </manifestEntries>
+                                </transformer>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+>>
+
+starterClass(packageName, className, processId) ::= <<
+package %packageName%;
+
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.serialization.StringSerializer;
+import se.fk.kafka.ProcessEvent;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
+import java.util.UUID;
+
+public class %className% {
+    public static void main(String[] args) {
+        String bootstrap = args.length > 0 ? args[0] : "localhost:9094";
+        String topic = "%processId%_start";
+        Map<String, Object> payload = new HashMap<>();
+
+        for (int i = 1; i < args.length; i++) {
+            String arg = args[i];
+            int eq = arg.indexOf('=');
+            if (eq > 0) {
+                payload.put(arg.substring(0, eq), arg.substring(eq + 1));
+            }
+        }
+
+        ProcessEvent event = new ProcessEvent(
+                UUID.randomUUID().toString(),
+                "%processId%",
+                "start",
+                UUID.randomUUID().toString(),
+                UUID.randomUUID().toString(),
+                payload,
+                ProcessEvent.Status.STARTED,
+                null
+        );
+
+        Properties props = new Properties();
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
+        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+
+        try (KafkaProducer<String, String> producer = new KafkaProducer<>(props)) {
+            producer.send(new ProducerRecord<>(topic, event.processInstanceId(), event.toJson()));
+            producer.flush();
+        }
+
+        System.out.println("Sent start event to " + topic + " with instanceId=" + event.processInstanceId());
+    }
+}
+>>
+
+processEventClass() ::= <<
+package se.fk.kafka;
+
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
+
+import java.util.Map;
+
+public record ProcessEvent(
+        String processInstanceId,
+        String processId,
+        String activityId,
+        String tokenId,
+        String correlationId,
+        Map<String, Object> payload,
+        Status status,
+        ErrorInfo error
+) {
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    public enum Status {
+        STARTED,
+        COMPLETED,
+        FAILED
+    }
+
+    public record ErrorInfo(String message, String code) {
+    }
+
+    public String toJson() {
+        try {
+            return MAPPER.writeValueAsString(this);
+        } catch (JacksonException e) {
+            throw new IllegalStateException("Failed to serialize ProcessEvent", e);
+        }
+    }
+
+    public static ProcessEvent fromJson(String json) {
+        try {
+            return MAPPER.readValue(json, ProcessEvent.class);
+        } catch (JacksonException e) {
+            throw new IllegalArgumentException("Failed to parse ProcessEvent", e);
+        }
+    }
+}
+>>
+
+processStateClass() ::= <<
+package se.fk.kafka;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.util.List;
+import java.util.Map;
+
+public record ProcessState(
+        String processInstanceId,
+        List<Token> tokens,
+        Map<String, Object> variables,
+        long version
+) {
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    public record Token(String tokenId, String at) {
+    }
+
+    public String toJson() {
+        try {
+            return MAPPER.writeValueAsString(this);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize ProcessState", e);
+        }
+    }
+
+    public static ProcessState fromJson(String json) {
+        try {
+            return MAPPER.readValue(json, ProcessState.class);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("Failed to parse ProcessState", e);
+        }
+    }
+}
+>>
+
+processStateStoreClass() ::= <<
+package se.fk.kafka;
+
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
+
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+
+public class ProcessStateStore implements AutoCloseable {
+    private final KafkaProducer<String, String> producer;
+    private final KafkaConsumer<String, String> consumer;
+    private final String topic;
+
+    public ProcessStateStore(String bootstrapServers, String topic) {
+        this.topic = topic;
+
+        Properties producerProps = new Properties();
+        producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        this.producer = new KafkaProducer<>(producerProps);
+
+        Properties consumerProps = new Properties();
+        consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "process-state-reader");
+        consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        consumerProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        consumerProps.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
+        this.consumer = new KafkaConsumer<>(consumerProps);
+    }
+
+    public void save(ProcessState state) {
+        ProducerRecord<String, String> record =
+                new ProducerRecord<>(topic, state.processInstanceId(), state.toJson());
+        producer.send(record);
+        producer.flush();
+    }
+
+    public ProcessState loadLatest(String processInstanceId, Duration timeout) {
+        List<TopicPartition> partitions = consumer.partitionsFor(topic).stream()
+                .map(info -> new TopicPartition(topic, info.partition()))
+                .toList();
+
+        if (partitions.isEmpty()) {
+            return null;
+        }
+
+        consumer.assign(partitions);
+        consumer.seekToBeginning(partitions);
+
+        // Naive scan to find the latest value for a key in a compacted topic.
+        Map<TopicPartition, Long> endOffsets = consumer.endOffsets(partitions);
+        Map<TopicPartition, Long> lastOffsets = new HashMap<>();
+        ProcessState latest = null;
+
+        long deadlineMs = System.currentTimeMillis() + timeout.toMillis();
+        while (System.currentTimeMillis() < deadlineMs) {
+            ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(200));
+            for (var record : records) {
+                TopicPartition partition = new TopicPartition(record.topic(), record.partition());
+                lastOffsets.put(partition, record.offset());
+                if (processInstanceId.equals(record.key())) {
+                    latest = ProcessState.fromJson(record.value());
+                }
+            }
+
+            boolean caughtUp = endOffsets.entrySet().stream().allMatch(entry -> {
+                long last = lastOffsets.getOrDefault(entry.getKey(), -1L);
+                return last >= entry.getValue() - 1;
+            });
+
+            if (caughtUp) {
+                return latest;
+            }
+        }
+
+        return latest;
+    }
+
+    @Override
+    public void close() {
+        producer.close();
+        consumer.close();
+    }
+}
+>>

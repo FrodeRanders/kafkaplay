@@ -1,47 +1,48 @@
-#
+---
 quarkus:
   application:
     name: "durga"
-
 mp:
   messaging:
     incoming:
-      # Input topic from Task A
-      processA_taskA_output:
+      order_fulfillment_validate_order_input:
         connector: "smallrye-kafka"
-        topic: "processA_taskA_output"
+        topic: "order_fulfillment_validate_order_input"
         value:
           deserializer: "org.apache.kafka.common.serialization.StringDeserializer"
-
-      # Kafka consumer for both topics
-      task-output:
+      order_fulfillment_fulfill_order_input:
         connector: "smallrye-kafka"
-        topic: "processA_taskB_output,processA_taskC_output"
+        topic: "order_fulfillment_fulfill_order_input"
         value:
           deserializer: "org.apache.kafka.common.serialization.StringDeserializer"
-        auto:
-          offset:
-            reset: "earliest"
-
+      order_fulfillment_ship_order_input:
+        connector: "smallrye-kafka"
+        topic: "order_fulfillment_ship_order_input"
+        value:
+          deserializer: "org.apache.kafka.common.serialization.StringDeserializer"
+      order_fulfillment_reject_order_input:
+        connector: "smallrye-kafka"
+        topic: "order_fulfillment_reject_order_input"
+        value:
+          deserializer: "org.apache.kafka.common.serialization.StringDeserializer"
     outgoing:
-      # Output to Task B
-      processA_taskB_input:
+      order_fulfillment_validate_order_output:
         connector: "smallrye-kafka"
-        topic: "processA_taskB_input"
+        topic: "order_fulfillment_validate_order_output"
         value:
           serializer: "org.apache.kafka.common.serialization.StringSerializer"
-
-      # Output to Task C
-      processA_taskC_input:
+      order_fulfillment_fulfill_order_output:
         connector: "smallrye-kafka"
-        topic: "processA_taskC_input"
+        topic: "order_fulfillment_fulfill_order_output"
         value:
           serializer: "org.apache.kafka.common.serialization.StringSerializer"
-
-      # Kafka producer to Task D
-      processA_taskD_input:
+      order_fulfillment_ship_order_output:
         connector: "smallrye-kafka"
-        topic: "processA_taskD_input"
+        topic: "order_fulfillment_ship_order_output"
         value:
           serializer: "org.apache.kafka.common.serialization.StringSerializer"
-
+      order_fulfillment_reject_order_output:
+        connector: "smallrye-kafka"
+        topic: "order_fulfillment_reject_order_output"
+        value:
+          serializer: "org.apache.kafka.common.serialization.StringSerializer"

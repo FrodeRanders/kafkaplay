@@ -44,3 +44,44 @@ kafka_b-1  | [2025-04-30 11:12:16,965] INFO Kafka startTimeMs: 1746011536964 (or
 kafka_b-1  | [2025-04-30 11:12:16,965] INFO [KafkaRaftServer nodeId=1] Kafka Server started (kafka.server.KafkaRaftServer)
 ```
 
+## BPMN scaffolding
+Generate worker, gateway, and orchestrator skeletons from a BPMN XML file using Camunda + ST4:
+
+```
+mvn -q clean package
+java -cp target/kafkaplay-1.0-SNAPSHOT.jar se.fk.kafka.tools.BpmnScaffolder path/to/process.bpmn
+```
+
+Output is written under `generated/` by default:
+- Java sources in `generated/src/main/java/se/fk/kafka/generated/`
+- `topics.sh` and `summary.json` in `generated/`
+- `README.md` describing generated artifacts
+- `pom.xml` for building the generated process on its own
+
+The generator skips any Java class that already exists in `src/main/java/`, merges new channels into
+`src/main/resources/application.yml` (formatting/comments may change), and includes XOR conditions as
+placeholders for you to implement.
+
+Note: generated modules build a shaded `*-all.jar` so you can run starter classes without managing a classpath.
+
+Optional flags:
+- `--dry-run` prints `summary.json`, `topics.sh`, and YAML previews without writing files.
+- `--out <dir>` writes generated files to a custom output directory.
+- `--transactions` generates transactional worker classes using Kafka's producer/consumer APIs.
+
+### Demo BPMN model
+An example BPMN model is included at `src/main/resources/bpmn/invoice_receipt.bpmn`, based on the common
+"Invoice Receipt" demo process pattern (register, review, approve/reject, notify). You can generate
+scaffolding from it like this:
+
+```
+mvn -q clean package
+java -cp target/kafkaplay-1.0-SNAPSHOT.jar se.fk.kafka.tools.BpmnScaffolder src/main/resources/bpmn/invoice_receipt.bpmn
+```
+
+Another common demo is the order fulfillment flow at `src/main/resources/bpmn/order_fulfillment.bpmn`:
+
+```
+mvn -q clean package
+java -cp target/kafkaplay-1.0-SNAPSHOT.jar se.fk.kafka.tools.BpmnScaffolder src/main/resources/bpmn/order_fulfillment.bpmn
+```
